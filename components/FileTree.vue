@@ -6,35 +6,55 @@
         :key="item.id"
         :draggable="true"
         @dragstart="onDragStart($event, item.id)"
-        @dragover="onDragOver($event, item.id)"
+        @dragenter="onDragEnter($event, index, item.id)"
+        @dragleave="onDragLeave($event, index, item.id)"
+        @dragover="onDragOver($event)"
         @drop="onDrop($event, item.id)"
-        :class="{ 'drag-over': dragOverItemId === item.id }"
         role="treeitem"
         :aria-expanded="!!item.children"
         :aria-grabbed="draggedItemId === item.id"
         tabindex="0"
       >
-        {{ item.position }} - {{ item.name }}
-        <button @click="deleteItem(item.id)" :disabled="!item.deletable || (item.children && item.children.length > 0)">Delete</button>
-        <ul v-if="item.children">
-          <FileTree 
-            :fileTree="item.children" 
-            :rootFileTree="rootFileTree" 
-            :isTopLevel="false" 
-            @itemMoved="emitItemMoved" 
-            @itemDeleted="emitItemDeleted" 
-          />
-        </ul>
+        <div v-if="dragging && dragOverIndex === index" class="placeholder"></div>
+        <div v-else>
+          {{ item.position }} - {{ item.name }}
+          <button @click="deleteItem(item.id)" :disabled="!item.deletable || (item.children && item.children.length > 0)">Delete</button>
+          <div
+            class="drop-zone-container"
+            @dragenter="onDragEnter($event, index, item.id)"
+            @dragleave="onDragLeave($event, index, item.id)"
+          >
+            <div
+              class="drop-zone"
+              v-show="dropZonesVisible[index] && draggedItemId !== item.id"
+              @dragover="onDragOver($event)"
+              @drop="onDropInside($event, item.id)"
+            >
+              Drop here to move inside
+            </div>
+            <ul v-if="item.children">
+              <FileTree 
+                :fileTree="item.children" 
+                :rootFileTree="rootFileTree" 
+                :isTopLevel="false" 
+                @itemMoved="emitItemMoved" 
+                @itemDeleted="emitItemDeleted" 
+                @resetDropZones="resetDropZones"
+              />
+            </ul>
+            <div
+              class="drop-zone"
+              v-show="dropZonesVisible[index] && draggedItemId !== item.id"
+              @dragover="onDragOver($event)"
+              @drop="onDropUnder($event, item.id)"
+            >
+              Drop here to move under
+            </div>
+          </div>
+        </div>
       </li>
+      <li v-if="dragging && dragOverIndex === fileTree.length" class="placeholder"></li>
     </ul>
-    <div
-      v-if="isTopLevel"
-      class="empty-slot"
-      @dragover="onDragOver($event)"
-      @drop="onDropToParent($event)"
-    >
-      Drop here to move up one level
-    </div>
   </div>
 </template>
 
@@ -56,12 +76,16 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['itemMoved', 'itemDeleted']);
+const emit = defineEmits(['itemMoved', 'itemDeleted', 'resetDropZones']);
 
 const { fileTree, rootFileTree, isTopLevel } = toRefs(reactive(props));
 
 let dragOverItemId = null;
 let draggedItemId = null;
+let dragging = false;
+let dragOverIndex = null;
+const dropZonesVisible = reactive({});
+const dropZoneCounters = reactive({});
 
 function findItemById(tree, id) {
   const stack = [...tree];
@@ -99,6 +123,7 @@ watch(rootFileTree, () => {
 }, { immediate: true });
 
 function onDragStart(event, itemId) {
+  console.log('Drag start:', itemId);
   const item = findItemById(rootFileTree.value, itemId);
   if (!item) {
     event.preventDefault();
@@ -106,12 +131,30 @@ function onDragStart(event, itemId) {
   }
   event.stopPropagation();
   draggedItemId = itemId;
+  dragging = true;
   event.dataTransfer.setData("text/plain", itemId);
 }
 
-function onDragOver(event, itemId) {
+function onDragEnter(event, index, itemId) {
   event.preventDefault();
-  dragOverItemId = itemId;
+  if (draggedItemId !== itemId) {
+    dropZoneCounters[index] = (dropZoneCounters[index] || 0) + 1;
+    dropZonesVisible[index] = true;
+  }
+}
+
+function onDragLeave(event, index, itemId) {
+  event.preventDefault();
+  if (draggedItemId !== itemId) {
+    dropZoneCounters[index] = (dropZoneCounters[index] || 1) - 1;
+    if (dropZoneCounters[index] <= 0) {
+      dropZonesVisible[index] = false;
+    }
+  }
+}
+
+function onDragOver(event) {
+  event.preventDefault();
 }
 
 function onDrop(event, targetItemId) {
@@ -119,17 +162,29 @@ function onDrop(event, targetItemId) {
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
   if (draggedItemId !== targetItemId) {
-    moveItem(draggedItemId, targetItemId);
+    moveItemAsChild(draggedItemId, targetItemId);
   }
-  dragOverItemId = null;
+  resetDragState();
 }
 
-function onDropToParent(event) {
+function onDropInside(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  moveItemUpOneLevel(draggedItemId);
-  dragOverItemId = null;
+  if (draggedItemId !== targetItemId) {
+    moveItemAsChild(draggedItemId, targetItemId);
+  }
+  resetDragState();
+}
+
+function onDropUnder(event, targetItemId) {
+  event.preventDefault();
+  event.stopPropagation();
+  const draggedItemId = event.dataTransfer.getData("text/plain");
+  if (draggedItemId !== targetItemId) {
+    moveItemUnder(draggedItemId, targetItemId);
+  }
+  resetDragState();
 }
 
 function moveItem(draggedItemId, targetItemId) {
@@ -159,29 +214,60 @@ function moveItem(draggedItemId, targetItemId) {
   emit('itemMoved', { draggedItemId, targetItemId, parentId: parent ? parent.id : null });
 }
 
-function moveItemUpOneLevel(draggedItemId) {
+function moveItemAsChild(draggedItemId, targetItemId) {
   const draggedItem = findItemById(rootFileTree.value, draggedItemId);
   if (!draggedItem) {
     return;
   }
 
   let parent = findParent(rootFileTree.value, draggedItemId);
-  if (!parent) {
-    return;
+  if (parent) {
+    parent.children = parent.children.filter(item => item.id !== draggedItemId);
+  } else {
+    const rootIndex = rootFileTree.value.findIndex(item => item.id === draggedItemId);
+    if (rootIndex !== -1) {
+      rootFileTree.value.splice(rootIndex, 1);
+    }
   }
 
-  let grandParent = findParent(rootFileTree.value, parent.id);
-  if (grandParent) {
-    parent.children = parent.children.filter(item => item.id !== draggedItemId);
-    grandParent.children.push(draggedItem);
-  } else {
-    parent.children = parent.children.filter(item => item.id !== draggedItemId);
-    rootFileTree.value.push(draggedItem);
+  const targetItem = findItemById(rootFileTree.value, targetItemId);
+  if (!targetItem.children) {
+    targetItem.children = [];
   }
+  targetItem.children.push(draggedItem);
 
   updatePositions(rootFileTree.value);
 
-  emit('itemMoved', { draggedItemId, targetItemId: grandParent ? grandParent.id : null, parentId: parent.id });
+  emit('itemMoved', { draggedItemId, targetItemId, parentId: parent ? parent.id : null });
+}
+
+function moveItemUnder(draggedItemId, targetItemId) {
+  const draggedItem = findItemById(rootFileTree.value, draggedItemId);
+  if (!draggedItem) {
+    return;
+  }
+
+  let parent = findParent(rootFileTree.value, draggedItemId);
+  if (parent) {
+    parent.children = parent.children.filter(item => item.id !== draggedItemId);
+  } else {
+    const rootIndex = rootFileTree.value.findIndex(item => item.id === draggedItemId);
+    if (rootIndex !== -1) {
+      rootFileTree.value.splice(rootIndex, 1);
+    }
+  }
+
+  let targetParent = findParent(rootFileTree.value, targetItemId);
+  if (!targetParent) {
+    targetParent = { children: rootFileTree.value };
+  }
+
+  const targetIndex = targetParent.children.findIndex(item => item.id === targetItemId);
+  targetParent.children.splice(targetIndex + 1, 0, draggedItem);
+
+  updatePositions(rootFileTree.value);
+
+  emit('itemMoved', { draggedItemId, targetItemId, parentId: targetParent ? targetParent.id : null });
 }
 
 function deleteItem(itemId) {
@@ -201,6 +287,23 @@ function deleteItem(itemId) {
   }
 }
 
+function resetDragState() {
+  dragOverItemId = null;
+  dragging = false;
+  dragOverIndex = null;
+  Object.keys(dropZonesVisible).forEach(key => {
+    dropZonesVisible[key] = false;
+  });
+  emit('resetDropZones');
+}
+
+function resetDropZones() {
+  Object.keys(dropZonesVisible).forEach(key => {
+    dropZonesVisible[key] = false;
+  });
+  emit('resetDropZones');
+}
+
 function emitItemMoved(event) {
   emit('itemMoved', event);
 }
@@ -211,15 +314,23 @@ function emitItemDeleted(event) {
 </script>
 
 <style>
-.empty-slot {
-  margin-top: 10px;
-  padding: 10px;
-  border: 2px dashed #ccc;
-  text-align: center;
+.placeholder {
+  height: 20px;
+  background-color: #f0f8ff;
+  border: 1px dashed #1e90ff;
+  margin-bottom: 10px;
 }
 
-.drag-over {
-  background-color: #f0f8ff;
-  border: 1px dashed #1e90ff; /* Clear visual indicator */
+.drop-zone-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.drop-zone {
+  margin: 5px 0;
+  padding: 5px;
+  border: 2px dashed #ccc;
+  text-align: center;
+  background-color: #f9f9f9;
 }
 </style>
