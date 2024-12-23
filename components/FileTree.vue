@@ -1,6 +1,6 @@
 <template>
   <div>
-    <ul>
+    <ul class="file-tree">
       <li
         v-for="(item, index) in fileTree"
         :key="item.id"
@@ -14,11 +14,11 @@
         :aria-expanded="!!item.children"
         :aria-grabbed="draggedItemId === item.id"
         tabindex="0"
+        class="file-tree-item"
       >
         <div v-if="dragging && dragOverIndex === index" class="placeholder"></div>
         <div v-else>
           {{ item.position }} - {{ item.name }}
-          <button @click="deleteItem(item.id)" :disabled="!item.deletable || (item.children && item.children.length > 0)">Delete</button>
           <div
             class="drop-zone-container"
             @dragenter="onDragEnter($event, index, item.id)"
@@ -28,28 +28,21 @@
               class="drop-zone"
               v-show="dropZonesVisible[index] && draggedItemId !== item.id"
               @dragover="onDragOver($event)"
-              @drop="onDropInside($event, item.id)"
+              @drop="onDropUnder($event, item.id)"
             >
-              Drop here to move inside
+              Move in between
             </div>
-            <ul v-if="item.children">
+            <ul v-if="item.children" class="file-tree-children">
               <FileTree 
                 :fileTree="item.children" 
                 :rootFileTree="rootFileTree" 
                 :isTopLevel="false" 
+                @draggedItemChanged="emitDraggedItemChanged"
                 @itemMoved="emitItemMoved" 
                 @itemDeleted="emitItemDeleted" 
                 @resetDropZones="resetDropZones"
               />
             </ul>
-            <div
-              class="drop-zone"
-              v-show="dropZonesVisible[index] && draggedItemId !== item.id"
-              @dragover="onDragOver($event)"
-              @drop="onDropUnder($event, item.id)"
-            >
-              Drop here to move under
-            </div>
           </div>
         </div>
       </li>
@@ -59,7 +52,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, reactive, toRefs, watch } from 'vue';
+import { defineProps, defineEmits, reactive, toRefs, watch, ref, computed } from 'vue';
 
 const props = defineProps({
   fileTree: {
@@ -76,7 +69,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['itemMoved', 'itemDeleted', 'resetDropZones']);
+const emit = defineEmits(['draggedItemChanged', 'itemMoved', 'itemDeleted', 'resetDropZones']);
 
 const { fileTree, rootFileTree, isTopLevel } = toRefs(reactive(props));
 
@@ -86,6 +79,12 @@ let dragging = false;
 let dragOverIndex = null;
 const dropZonesVisible = reactive({});
 const dropZoneCounters = reactive({});
+
+const draggedItem = ref(null);
+
+const canDeleteDraggedItem = computed(() => {
+  return draggedItem.value && draggedItem.value.deletable && (!draggedItem.value.children || draggedItem.value.children.length === 0);
+});
 
 function findItemById(tree, id) {
   const stack = [...tree];
@@ -122,6 +121,24 @@ watch(rootFileTree, () => {
   updatePositions(rootFileTree.value);
 }, { immediate: true });
 
+function isDescendant(parentId, childId) {
+  const parentItem = findItemById(rootFileTree.value, parentId);
+  if (!parentItem || !parentItem.children) {
+    return false;
+  }
+  const stack = [...parentItem.children];
+  while (stack.length) {
+    const item = stack.pop();
+    if (item.id === childId) {
+      return true;
+    }
+    if (item.children) {
+      stack.push(...item.children);
+    }
+  }
+  return false;
+}
+
 function onDragStart(event, itemId) {
   console.log('Drag start:', itemId);
   const item = findItemById(rootFileTree.value, itemId);
@@ -131,8 +148,10 @@ function onDragStart(event, itemId) {
   }
   event.stopPropagation();
   draggedItemId = itemId;
+  draggedItem.value = item;
   dragging = true;
   event.dataTransfer.setData("text/plain", itemId);
+  emitDraggedItemChanged(item);
 }
 
 function onDragEnter(event, index, itemId) {
@@ -161,7 +180,7 @@ function onDrop(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId) {
+  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
     moveItemAsChild(draggedItemId, targetItemId);
   }
   resetDragState();
@@ -171,7 +190,7 @@ function onDropInside(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId) {
+  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
     moveItemAsChild(draggedItemId, targetItemId);
   }
   resetDragState();
@@ -181,13 +200,17 @@ function onDropUnder(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId) {
+  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
     moveItemUnder(draggedItemId, targetItemId);
   }
   resetDragState();
 }
 
 function moveItem(draggedItemId, targetItemId) {
+  if (isDescendant(draggedItemId, targetItemId)) {
+    return;
+  }
+
   const draggedItem = findItemById(rootFileTree.value, draggedItemId);
   if (!draggedItem) {
     return;
@@ -215,6 +238,10 @@ function moveItem(draggedItemId, targetItemId) {
 }
 
 function moveItemAsChild(draggedItemId, targetItemId) {
+  if (isDescendant(draggedItemId, targetItemId)) {
+    return;
+  }
+
   const draggedItem = findItemById(rootFileTree.value, draggedItemId);
   if (!draggedItem) {
     return;
@@ -242,6 +269,10 @@ function moveItemAsChild(draggedItemId, targetItemId) {
 }
 
 function moveItemUnder(draggedItemId, targetItemId) {
+  if (isDescendant(draggedItemId, targetItemId)) {
+    return;
+  }
+
   const draggedItem = findItemById(rootFileTree.value, draggedItemId);
   if (!draggedItem) {
     return;
@@ -287,8 +318,18 @@ function deleteItem(itemId) {
   }
 }
 
+function deleteDraggedItem() {
+  if (canDeleteDraggedItem.value) {
+    deleteItem(draggedItem.value.id);
+    draggedItem.value = null;
+    resetDragState();
+  }
+}
+
 function resetDragState() {
   dragOverItemId = null;
+  draggedItemId = null;
+  draggedItem.value = null;
   dragging = false;
   dragOverIndex = null;
   Object.keys(dropZonesVisible).forEach(key => {
@@ -304,6 +345,10 @@ function resetDropZones() {
   emit('resetDropZones');
 }
 
+function emitDraggedItemChanged(item) {
+  emit('draggedItemChanged', item);
+}
+
 function emitItemMoved(event) {
   emit('itemMoved', event);
 }
@@ -314,6 +359,15 @@ function emitItemDeleted(event) {
 </script>
 
 <style>
+.file-tree {
+  list-style-type: none;
+  padding-left: 20px;
+}
+
+.file-tree-item {
+  margin: 5px 0;
+}
+
 .placeholder {
   height: 20px;
   background-color: #f0f8ff;
