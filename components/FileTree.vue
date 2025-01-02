@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="file-tree-container" ref="scrollableContainer">
     <ul class="file-tree">
       <li
         v-for="(item, index) in fileTree"
@@ -16,7 +16,10 @@
         tabindex="0"
         class="file-tree-item"
       >
-        <div v-if="dragging && dragOverIndex === index" class="placeholder"></div>
+        <div
+          v-if="dragging && dragOverIndex === index"
+          class="placeholder"
+        ></div>
         <div v-else>
           {{ item.position }} - {{ item.name }}
           <div
@@ -30,46 +33,70 @@
               @dragover="onDragOver($event)"
               @drop="onDropUnder($event, item.id)"
             >
-              Move in between
+              Move to next position
             </div>
             <ul v-if="item.children" class="file-tree-children">
-              <FileTree 
-                :fileTree="item.children" 
-                :rootFileTree="rootFileTree" 
-                :isTopLevel="false" 
+              <FileTree
+                :fileTree="item.children"
+                :rootFileTree="rootFileTree"
+                :isTopLevel="false"
                 @draggedItemChanged="emitDraggedItemChanged"
-                @itemMoved="emitItemMoved" 
-                @itemDeleted="emitItemDeleted" 
+                @itemMoved="emitItemMoved"
+                @itemDeleted="emitItemDeleted"
                 @resetDropZones="resetDropZones"
               />
             </ul>
           </div>
         </div>
       </li>
-      <li v-if="dragging && dragOverIndex === fileTree.length" class="placeholder"></li>
+      <li
+        v-if="dragging && dragOverIndex === fileTree.length"
+        class="placeholder"
+      ></li>
+      <li
+        class="drop-zone"
+        v-show="dragging && dropZonesVisible['end']"
+        @dragover="onDragOver($event)"
+        @drop="onDropAtEnd($event)"
+      >
+        Move to next position
+      </li>
     </ul>
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits, reactive, toRefs, watch, ref, computed } from 'vue';
+import {
+  defineProps,
+  defineEmits,
+  reactive,
+  toRefs,
+  watch,
+  ref,
+  computed,
+} from "vue";
 
 const props = defineProps({
   fileTree: {
     type: Array,
-    required: true
+    required: true,
   },
   rootFileTree: {
     type: Array,
-    required: true
+    required: true,
   },
   isTopLevel: {
     type: Boolean,
-    default: true
-  }
+    default: true,
+  },
 });
 
-const emit = defineEmits(['draggedItemChanged', 'itemMoved', 'itemDeleted', 'resetDropZones']);
+const emit = defineEmits([
+  "draggedItemChanged",
+  "itemMoved",
+  "itemDeleted",
+  "resetDropZones",
+]);
 
 const { fileTree, rootFileTree, isTopLevel } = toRefs(reactive(props));
 
@@ -79,11 +106,17 @@ let dragging = false;
 let dragOverIndex = null;
 const dropZonesVisible = reactive({});
 const dropZoneCounters = reactive({});
+const scrollableContainer = ref(null);
+let autoScrollInterval = null;
 
 const draggedItem = ref(null);
 
 const canDeleteDraggedItem = computed(() => {
-  return draggedItem.value && draggedItem.value.deletable && (!draggedItem.value.children || draggedItem.value.children.length === 0);
+  return (
+    draggedItem.value &&
+    draggedItem.value.deletable &&
+    (!draggedItem.value.children || draggedItem.value.children.length === 0)
+  );
 });
 
 function findItemById(tree, id) {
@@ -100,7 +133,7 @@ function findParent(tree, id) {
   const stack = [...tree];
   while (stack.length) {
     const item = stack.pop();
-    if (item.children && item.children.some(child => child.id === id)) {
+    if (item.children && item.children.some((child) => child.id === id)) {
       return item;
     }
     if (item.children) stack.push(...item.children);
@@ -108,18 +141,24 @@ function findParent(tree, id) {
   return null;
 }
 
-function updatePositions(tree, parentPosition = '') {
+function updatePositions(tree, parentPosition = "") {
   tree.forEach((item, index) => {
-    item.position = parentPosition ? `${parentPosition}-${index + 1}` : `${index + 1}`;
+    item.position = parentPosition
+      ? `${parentPosition}-${index + 1}`
+      : `${index + 1}`;
     if (item.children) {
       updatePositions(item.children, item.position);
     }
   });
 }
 
-watch(rootFileTree, () => {
-  updatePositions(rootFileTree.value);
-}, { immediate: true });
+watch(
+  rootFileTree,
+  () => {
+    updatePositions(rootFileTree.value);
+  },
+  { immediate: true }
+);
 
 function isDescendant(parentId, childId) {
   const parentItem = findItemById(rootFileTree.value, parentId);
@@ -140,7 +179,7 @@ function isDescendant(parentId, childId) {
 }
 
 function onDragStart(event, itemId) {
-  console.log('Drag start:', itemId);
+  console.log("Drag start:", itemId);
   const item = findItemById(rootFileTree.value, itemId);
   if (!item) {
     event.preventDefault();
@@ -174,13 +213,28 @@ function onDragLeave(event, index, itemId) {
 
 function onDragOver(event) {
   event.preventDefault();
+  const container = scrollableContainer.value;
+  if (!container) return;
+  const rect = container.getBoundingClientRect();
+  const offset = 20; // Distance from the edge to start scrolling
+
+  if (event.clientY < rect.top + offset) {
+    startAutoScroll(-5); // Scroll up
+  } else if (event.clientY > rect.bottom - offset) {
+    startAutoScroll(5); // Scroll down
+  } else {
+    stopAutoScroll();
+  }
 }
 
 function onDrop(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
+  if (
+    draggedItemId !== targetItemId &&
+    !isDescendant(draggedItemId, targetItemId)
+  ) {
     moveItemAsChild(draggedItemId, targetItemId);
   }
   resetDragState();
@@ -190,7 +244,10 @@ function onDropInside(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
+  if (
+    draggedItemId !== targetItemId &&
+    !isDescendant(draggedItemId, targetItemId)
+  ) {
     moveItemAsChild(draggedItemId, targetItemId);
   }
   resetDragState();
@@ -199,8 +256,12 @@ function onDropInside(event, targetItemId) {
 function onDropUnder(event, targetItemId) {
   event.preventDefault();
   event.stopPropagation();
+  stopAutoScroll();
   const draggedItemId = event.dataTransfer.getData("text/plain");
-  if (draggedItemId !== targetItemId && !isDescendant(draggedItemId, targetItemId)) {
+  if (
+    draggedItemId !== targetItemId &&
+    !isDescendant(draggedItemId, targetItemId)
+  ) {
     moveItemUnder(draggedItemId, targetItemId);
   }
   resetDragState();
@@ -218,9 +279,13 @@ function moveItem(draggedItemId, targetItemId) {
 
   let parent = findParent(rootFileTree.value, draggedItemId);
   if (parent) {
-    parent.children = parent.children.filter(item => item.id !== draggedItemId);
+    parent.children = parent.children.filter(
+      (item) => item.id !== draggedItemId
+    );
   } else {
-    const rootIndex = rootFileTree.value.findIndex(item => item.id === draggedItemId);
+    const rootIndex = rootFileTree.value.findIndex(
+      (item) => item.id === draggedItemId
+    );
     if (rootIndex !== -1) {
       rootFileTree.value.splice(rootIndex, 1);
     }
@@ -234,7 +299,11 @@ function moveItem(draggedItemId, targetItemId) {
 
   updatePositions(rootFileTree.value);
 
-  emit('itemMoved', { draggedItemId, targetItemId, parentId: parent ? parent.id : null });
+  emit("itemMoved", {
+    draggedItemId,
+    targetItemId,
+    parentId: parent ? parent.id : null,
+  });
 }
 
 function moveItemAsChild(draggedItemId, targetItemId) {
@@ -249,9 +318,13 @@ function moveItemAsChild(draggedItemId, targetItemId) {
 
   let parent = findParent(rootFileTree.value, draggedItemId);
   if (parent) {
-    parent.children = parent.children.filter(item => item.id !== draggedItemId);
+    parent.children = parent.children.filter(
+      (item) => item.id !== draggedItemId
+    );
   } else {
-    const rootIndex = rootFileTree.value.findIndex(item => item.id === draggedItemId);
+    const rootIndex = rootFileTree.value.findIndex(
+      (item) => item.id === draggedItemId
+    );
     if (rootIndex !== -1) {
       rootFileTree.value.splice(rootIndex, 1);
     }
@@ -265,7 +338,11 @@ function moveItemAsChild(draggedItemId, targetItemId) {
 
   updatePositions(rootFileTree.value);
 
-  emit('itemMoved', { draggedItemId, targetItemId, parentId: parent ? parent.id : null });
+  emit("itemMoved", {
+    draggedItemId,
+    targetItemId,
+    parentId: parent ? parent.id : null,
+  });
 }
 
 function moveItemUnder(draggedItemId, targetItemId) {
@@ -280,9 +357,13 @@ function moveItemUnder(draggedItemId, targetItemId) {
 
   let parent = findParent(rootFileTree.value, draggedItemId);
   if (parent) {
-    parent.children = parent.children.filter(item => item.id !== draggedItemId);
+    parent.children = parent.children.filter(
+      (item) => item.id !== draggedItemId
+    );
   } else {
-    const rootIndex = rootFileTree.value.findIndex(item => item.id === draggedItemId);
+    const rootIndex = rootFileTree.value.findIndex(
+      (item) => item.id === draggedItemId
+    );
     if (rootIndex !== -1) {
       rootFileTree.value.splice(rootIndex, 1);
     }
@@ -293,28 +374,38 @@ function moveItemUnder(draggedItemId, targetItemId) {
     targetParent = { children: rootFileTree.value };
   }
 
-  const targetIndex = targetParent.children.findIndex(item => item.id === targetItemId);
+  const targetIndex = targetParent.children.findIndex(
+    (item) => item.id === targetItemId
+  );
   targetParent.children.splice(targetIndex + 1, 0, draggedItem);
 
   updatePositions(rootFileTree.value);
 
-  emit('itemMoved', { draggedItemId, targetItemId, parentId: targetParent ? targetParent.id : null });
+  emit("itemMoved", {
+    draggedItemId,
+    targetItemId,
+    parentId: targetParent ? targetParent.id : null,
+  });
 }
 
 function deleteItem(itemId) {
   const item = findItemById(rootFileTree.value, itemId);
-  if (item && item.deletable && (!item.children || item.children.length === 0)) {
+  if (
+    item &&
+    item.deletable &&
+    (!item.children || item.children.length === 0)
+  ) {
     let parent = findParent(rootFileTree.value, itemId);
     if (parent) {
-      parent.children = parent.children.filter(child => child.id !== itemId);
+      parent.children = parent.children.filter((child) => child.id !== itemId);
     } else {
-      const index = rootFileTree.value.findIndex(item => item.id === itemId);
+      const index = rootFileTree.value.findIndex((item) => item.id === itemId);
       if (index !== -1) {
         rootFileTree.value.splice(index, 1);
       }
     }
     updatePositions(rootFileTree.value);
-    emit('itemDeleted', { itemId, parentId: parent ? parent.id : null });
+    emit("itemDeleted", { itemId, parentId: parent ? parent.id : null });
   }
 }
 
@@ -332,29 +423,47 @@ function resetDragState() {
   draggedItem.value = null;
   dragging = false;
   dragOverIndex = null;
-  Object.keys(dropZonesVisible).forEach(key => {
+  Object.keys(dropZonesVisible).forEach((key) => {
     dropZonesVisible[key] = false;
   });
-  emit('resetDropZones');
+  emit("resetDropZones");
 }
 
 function resetDropZones() {
-  Object.keys(dropZonesVisible).forEach(key => {
+  Object.keys(dropZonesVisible).forEach((key) => {
     dropZonesVisible[key] = false;
   });
-  emit('resetDropZones');
+  emit("resetDropZones");
 }
 
 function emitDraggedItemChanged(item) {
-  emit('draggedItemChanged', item);
+  emit("draggedItemChanged", item);
 }
 
 function emitItemMoved(event) {
-  emit('itemMoved', event);
+  emit("itemMoved", event);
 }
 
 function emitItemDeleted(event) {
-  emit('itemDeleted', event);
+  emit("itemDeleted", event);
+}
+
+function startAutoScroll(speed) {
+  if (autoScrollInterval) {
+    clearInterval(autoScrollInterval);
+  }
+  autoScrollInterval = setInterval(() => {
+    if (scrollableContainer.value) {
+      scrollableContainer.value.scrollTop += speed;
+    }
+  }, 20);
+}
+
+function stopAutoScroll() {
+  if (autoScrollInterval) {
+    clearInterval(autoScrollInterval);
+    autoScrollInterval = null;
+  }
 }
 </script>
 
@@ -386,5 +495,10 @@ function emitItemDeleted(event) {
   border: 2px dashed #ccc;
   text-align: center;
   background-color: #f9f9f9;
+}
+
+.file-tree-container {
+  max-height: 100%;
+  overflow-y: auto;
 }
 </style>
