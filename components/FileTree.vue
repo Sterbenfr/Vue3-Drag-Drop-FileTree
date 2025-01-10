@@ -36,8 +36,19 @@
               Move to next position
             </div>
             <ul v-if="item.children" class="file-tree-children">
+              <!-- Drop zone before the first child -->
+              <li
+                class="drop-zone"
+                v-show="dragging && dropZonesVisible[`first-${item.id}`]"
+                @dragover="onDragOver($event)"
+                @drop="onDropAtFirst($event, item.id)"
+              >
+                Move to top position
+              </li>
               <FileTree
-                :fileTree="item.children"
+                v-for="child in item.children"
+                :key="child.id"
+                :fileTree="[child]"
                 :rootFileTree="rootFileTree"
                 :isTopLevel="false"
                 @draggedItemChanged="emitDraggedItemChanged"
@@ -182,6 +193,7 @@ function onDragEnter(event, index, itemId) {
   if (draggedItemId !== itemId) {
     dropZoneCounters[index] = (dropZoneCounters[index] || 0) + 1;
     dropZonesVisible[index] = true;
+    dropZonesVisible[`first-${itemId}`] = true; // Ensure the first child drop zone is visible
   }
 }
 
@@ -191,6 +203,7 @@ function onDragLeave(event, index, itemId) {
     dropZoneCounters[index] = (dropZoneCounters[index] || 1) - 1;
     if (dropZoneCounters[index] <= 0) {
       dropZonesVisible[index] = false;
+      dropZonesVisible[`first-${itemId}`] = false; // Ensure the first child drop zone is hidden
     }
   }
 }
@@ -242,6 +255,20 @@ function onDropUnder(event, targetItemId) {
     !isDescendant(draggedItemId, targetItemId)
   ) {
     moveItemUnder(draggedItemId, targetItemId);
+  }
+  resetDragState();
+}
+
+function onDropAtFirst(event, targetItemId) {
+  event.preventDefault();
+  event.stopPropagation();
+  stopAutoScroll();
+  const draggedItemId = event.dataTransfer.getData("text/plain");
+  if (
+    draggedItemId !== targetItemId &&
+    !isDescendant(draggedItemId, targetItemId)
+  ) {
+    moveItemToFirst(draggedItemId, targetItemId);
   }
   resetDragState();
 }
@@ -325,6 +352,45 @@ function moveItemUnder(draggedItemId, targetItemId) {
     draggedItemId,
     targetItemId,
     parentId: targetParent ? targetParent.id : null,
+  });
+}
+
+function moveItemToFirst(draggedItemId, targetItemId) {
+  if (isDescendant(draggedItemId, targetItemId)) {
+    return;
+  }
+
+  const draggedItem = findItemById(rootFileTree.value, draggedItemId);
+  if (!draggedItem) {
+    return;
+  }
+
+  let parent = findParent(rootFileTree.value, draggedItemId);
+  if (parent) {
+    parent.children = parent.children.filter(
+      (item) => item.id !== draggedItemId
+    );
+  } else {
+    const rootIndex = rootFileTree.value.findIndex(
+      (item) => item.id === draggedItemId
+    );
+    if (rootIndex !== -1) {
+      rootFileTree.value.splice(rootIndex, 1);
+    }
+  }
+
+  const targetItem = findItemById(rootFileTree.value, targetItemId);
+  if (!targetItem.children) {
+    targetItem.children = [];
+  }
+  targetItem.children.unshift(draggedItem);
+
+  updatePositions(rootFileTree.value);
+
+  emit("itemMoved", {
+    draggedItemId,
+    targetItemId,
+    parentId: parent ? parent.id : null,
   });
 }
 
